@@ -1,9 +1,9 @@
 llm:
   api_type: "openai"  # or azure / ollama / groq etc.
-  base_url: "YOUR_BASE_URL"
+  base_url: "YOUR_BASE_URL" . # Probably https://api.openai.com/v1
   api_key: "YOUR_API_KEY"
   model: "gpt-4-turbo"  # or gpt-3.5-turbo
-  proxy: "YOUR_PROXY"  # for LLM API requests
+  proxy: "YOUR_PROXY"  # Optional. For LLM API requests
   timeout: 300 # Optional. If set to 0, default value is 300.
 
 

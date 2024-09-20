@@ -1,7 +1,7 @@
 from typing import Optional
 import yaml
 from enum import Enum
-from yaml_model import YamlModel
+from kermit.configs.yaml_model import YamlModel
 
 
 class LLMType(Enum):
