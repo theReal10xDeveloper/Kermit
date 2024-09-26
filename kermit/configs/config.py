@@ -7,11 +7,8 @@ from kermit.constants import CONFIG_ROOT, PACKAGE_ROOT
 
 
 class Config(YamlModel):
-    llm: LLMConfig
-
-    project_root: Path
-
-    a: str
+    # llm: LLMConfig
+    a: int = 1
 
     @classmethod
     def from_home(cls, path):
