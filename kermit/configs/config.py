@@ -7,7 +7,7 @@ from kermit.constants import CONFIG_ROOT, PACKAGE_ROOT
 
 
 class Config(YamlModel):
-    # llm: LLMConfig
+    llm: LLMConfig
     a: int = 1
 
     @classmethod

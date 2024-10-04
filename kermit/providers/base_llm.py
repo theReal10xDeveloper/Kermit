@@ -1,13 +1,27 @@
 from abc import ABC, abstractmethod
+import json
 from typing import Optional, Union
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel
+from tenacity import (
+    after_log,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_random_exponential,
+)
 
+
+from kermit.logger import logger
 from kermit.configs.llm_config import LLMConfig
+from kermit.providers.cost_calculator import Cost, CostCalculator
+from kermit.schemas.message import Message
 
 
-'''Defines the parent class of all LLM providers'''
+"""Defines the parent class of all LLM providers"""
+
+
 class BaseLLM(ABC):
     """LLM API abstract class, requiring all inheritors to provide a series of standard capabilities"""
 
@@ -17,7 +31,7 @@ class BaseLLM(ABC):
 
     # OpenAI / Azure / Others
     aclient: Optional[Union[AsyncOpenAI]] = None
-    cost_manager: Optional[CostManager] = None
+    cost_manager: Optional[CostCalculator] = None
     model: Optional[str] = None  # deprecated
     pricing_plan: Optional[str] = None
 
@@ -25,7 +39,9 @@ class BaseLLM(ABC):
     def __init__(self, config: LLMConfig):
         pass
 
-    def _user_msg(self, msg: str, images: Optional[Union[str, list[str]]] = None) -> dict[str, Union[str, dict]]:
+    def _user_msg(
+        self, msg: str, images: Optional[Union[str, list[str]]] = None
+    ) -> dict[str, Union[str, dict]]:
         if images:
             # as gpt-4v, chat with image
             return self._user_msg_with_imgs(msg, images)
@@ -41,7 +57,9 @@ class BaseLLM(ABC):
         content = [{"type": "text", "text": msg}]
         for image in images:
             # image url or image base64
-            url = image if image.startswith("http") else f"data:image/jpeg;base64,{image}"
+            url = (
+                image if image.startswith("http") else f"data:image/jpeg;base64,{image}"
+            )
             # it can with multiple-image inputs
             content.append({"type": "image_url", "image_url": {"url": url}})
         return {"role": "user", "content": content}
@@ -51,10 +69,13 @@ class BaseLLM(ABC):
 
     def _system_msg(self, msg: str) -> dict[str, str]:
         return {"role": "system", "content": msg}
-#TODO
-    def format_msg(self, messages: Union[str, Message, list[dict], list[Message], list[str]]) -> list[dict]:
+
+    # TODO
+    def format_msg(
+        self, messages: Union[str, Message, list[dict], list[Message], list[str]]
+    ) -> list[dict]:
         """convert messages to list[dict]."""
-        from metagpt.schema import Message
+        from kermit.schemas import Message
 
         if not isinstance(messages, list):
             messages = [messages]
@@ -80,7 +101,12 @@ class BaseLLM(ABC):
     def _default_system_msg(self):
         return self._system_msg(self.system_prompt)
 
-    def _update_costs(self, usage: Union[dict, BaseModel], model: str = None, local_calc_usage: bool = True):
+    def _update_costs(
+        self,
+        usage: Union[dict, BaseModel],
+        model: str = None,
+        local_calc_usage: bool = True,
+    ):
         """update each request's token cost
         Args:
             model (str): model name or in some scenarios called endpoint
@@ -96,11 +122,13 @@ class BaseLLM(ABC):
                 completion_tokens = int(usage.get("completion_tokens", 0))
                 self.cost_manager.update_cost(prompt_tokens, completion_tokens, model)
             except Exception as e:
-                logger.error(f"{self.__class__.__name__} updates costs failed! exp: {e}")
+                logger.error(
+                    f"{self.__class__.__name__} updates costs failed! exp: {e}"
+                )
 
-    def get_costs(self) -> Costs:
+    def get_costs(self) -> Cost:
         if not self.cost_manager:
-            return Costs(0, 0, 0, 0)
+            return Cost(0, 0, 0, 0)
         return self.cost_manager.get_costs()
 
     async def aask(
@@ -109,7 +137,6 @@ class BaseLLM(ABC):
         system_msgs: Optional[list[str]] = None,
         format_msgs: Optional[list[dict[str, str]]] = None,
         images: Optional[Union[str, list[str]]] = None,
-        timeout=USE_CONFIG_TIMEOUT,
         stream=None,
     ) -> str:
         if system_msgs:
@@ -127,31 +154,35 @@ class BaseLLM(ABC):
         if stream is None:
             stream = self.config.stream
         logger.debug(message)
-        rsp = await self.acompletion_text(message, stream=stream, timeout=self.get_timeout(timeout))
+        rsp = await self.acompletion_text(message, stream=stream)
         return rsp
 
     def _extract_assistant_rsp(self, context):
         return "\n".join([i["content"] for i in context if i["role"] == "assistant"])
 
-    async def aask_batch(self, msgs: list, timeout=USE_CONFIG_TIMEOUT) -> str:
+    async def aask_batch(self, msgs: list) -> str:
         """Sequential questioning"""
         context = []
         for msg in msgs:
             umsg = self._user_msg(msg)
             context.append(umsg)
-            rsp_text = await self.acompletion_text(context, timeout=self.get_timeout(timeout))
+            rsp_text = await self.acompletion_text(context)
             context.append(self._assistant_msg(rsp_text))
         return self._extract_assistant_rsp(context)
 
-    async def aask_code(self, messages: Union[str, Message, list[dict]], timeout=USE_CONFIG_TIMEOUT, **kwargs) -> dict:
+    async def aask_code(
+        self,
+        messages: Union[str, Message, list[dict]],
+        **kwargs,
+    ) -> dict:
         raise NotImplementedError
 
     @abstractmethod
-    async def _achat_completion(self, messages: list[dict], timeout=USE_CONFIG_TIMEOUT):
+    async def _achat_completion(self, messages: list[dict]):
         """_achat_completion implemented by inherited class"""
 
     @abstractmethod
-    async def acompletion(self, messages: list[dict], timeout=USE_CONFIG_TIMEOUT):
+    async def acompletion(self, messages: list[dict]):
         """Asynchronous version of completion
         All GPTAPIs are required to provide the standard OpenAI completion interface
         [
@@ -162,7 +193,10 @@ class BaseLLM(ABC):
         """
 
     @abstractmethod
-    async def _achat_completion_stream(self, messages: list[dict], timeout: int = USE_CONFIG_TIMEOUT) -> str:
+    async def _achat_completion_stream(
+        self,
+        messages: list[dict],
+    ) -> str:
         """_achat_completion_stream implemented by inherited class"""
 
     @retry(
@@ -170,15 +204,17 @@ class BaseLLM(ABC):
         wait=wait_random_exponential(min=1, max=60),
         after=after_log(logger, logger.level("WARNING").name),
         retry=retry_if_exception_type(ConnectionError),
-        retry_error_callback=log_and_reraise,
+        # retry_error_callback=log_and_reraise,
     )
     async def acompletion_text(
-        self, messages: list[dict], stream: bool = False, timeout: int = USE_CONFIG_TIMEOUT
+        self,
+        messages: list[dict],
+        stream: bool = False,
     ) -> str:
         """Asynchronous version of completion. Return str. Support stream-print"""
         if stream:
-            return await self._achat_completion_stream(messages, timeout=self.get_timeout(timeout))
-        resp = await self._achat_completion(messages, timeout=self.get_timeout(timeout))
+            return await self._achat_completion_stream(messages)
+        resp = await self._achat_completion(messages)
         return self.get_choice_text(resp)
 
     def get_choice_text(self, rsp: dict) -> str:
@@ -241,6 +277,3 @@ class BaseLLM(ABC):
         """Set model and return self. For example, `with_model("gpt-3.5-turbo")`."""
         self.config.model = model
         return self
-
-    def get_timeout(self, timeout: int) -> int:
-        return timeout or self.config.timeout or LLM_API_TIMEOUT

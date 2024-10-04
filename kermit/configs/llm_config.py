@@ -36,3 +36,5 @@ class LLMConfig(YamlModel):
     logprobs: Optional[bool] = None
     top_logprobs: Optional[int] = None
     timeout: int = 600
+    proxy: Optional[str] = None
+    calc_usage: Optional[bool] = True
